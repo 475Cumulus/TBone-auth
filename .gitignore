@@ -1,0 +1,17 @@
+.DS_Store
+.svn
+*.csv
+*.sqlite
+*.db
+*.py[cod]
+*.pyc
+.coverage
+postactivate
+docs/_build/
+*.egg
+*.egg-info
+/todos.txt
+/dist
+.cache
+node_modules
+
