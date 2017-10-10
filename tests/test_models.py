@@ -7,33 +7,17 @@ import pytest
 from pymongo.errors import DuplicateKeyError
 from tbone.db.models import create_collection
 from tbone.testing.fixtures import *
-from tbone.testing.clients import App
 from tbone_auth.models import *
 from tbone_auth.auth import authenticate
+from .base import create_app
 
 
 USERNAME = 'rburg'
 PASSWORD = 'channel4i$gr8'
 
-
 @pytest.mark.asyncio
-@pytest.fixture(scope='function')
-async def bootstrap_app(db):
-    ''' Helper fixture for loading the accounts.json fixture into the database '''
-    app = App(db=db)
-
-    # create collections and db indices
-    futures = []
-    for model in [User, Token]:
-        futures.append(create_collection(db, model))
-
-    await asyncio.gather(*futures)
-    return app
-
-
-@pytest.mark.asyncio
-async def test_create_user_with_unique_username_and_email(bootstrap_app):
-    app = bootstrap_app
+async def test_create_user_with_unique_username_and_email(create_app):
+    app = create_app
     user_data = {
         'username': USERNAME,
         'first_name': 'Ron',
@@ -61,8 +45,8 @@ async def test_create_user_with_unique_username_and_email(bootstrap_app):
 
 
 @pytest.mark.asyncio
-async def test_create_multiple_users_without_email_address(bootstrap_app):
-    app = bootstrap_app
+async def test_create_multiple_users_without_email_address(create_app):
+    app = create_app
 
     COUNT = 10
     futures = []
@@ -84,8 +68,8 @@ async def test_create_multiple_users_without_email_address(bootstrap_app):
 
 
 @pytest.mark.asyncio
-async def test_authenticate_user(bootstrap_app):
-    app = bootstrap_app
+async def test_authenticate_user(create_app):
+    app = create_app
     user_data = {
         'username': USERNAME,
         'first_name': 'Ron',
@@ -128,6 +112,34 @@ async def test_create_user_with_email_as_username(db):
     same_user = await EmailUser.find_one(db, {'email': 'rburg@channel4.com'})
     assert isinstance(same_user, User)
     assert same_user._id
+
+
+@pytest.mark.asyncio
+async def test_create_token_for_user(create_app):
+    app = create_app
+    # create user
+    user_data = {
+        'username': USERNAME,
+        'first_name': 'Ron',
+        'last_name': 'Burgundy',
+        'email': 'rburg@channel4.com'
+    }
+    user = User(user_data)
+    user.set_password(PASSWORD)
+    await user.save(app.db)
+    assert user._id
+    # get or create token for user
+    session = await Session.get_or_create(app.db, user)
+    assert isinstance(session, Session)
+    # get or create session for user
+    session2 = await Session.get_or_create(app.db, user)
+    assert isinstance(session2, Session)
+    assert session.token == session.token
+    # make sure there is only one session
+    cursor = User.get_cursor(app.db)
+    sessions = await Session.find(cursor)
+    assert len(sessions) == 1
+
 
 
 

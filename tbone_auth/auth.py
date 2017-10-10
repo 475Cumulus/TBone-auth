@@ -2,10 +2,10 @@
 # encoding: utf-8
 
 import asyncio
-from datetime import datetime
+import datetime
 from collections import defaultdict
 # from base.authentication import Authentication
-from .models import User, Token
+from .models import User
 
 
 class AuthenticationBackend(object):
@@ -15,7 +15,6 @@ class AuthenticationBackend(object):
     '''
     def authenticate(**credentials):
         raise NotImplementedError()
-
 
 
 class DatabaseAuthenticationBackend(AuthenticationBackend):
@@ -28,11 +27,11 @@ class DatabaseAuthenticationBackend(AuthenticationBackend):
         user = await User.find_one(db, {User.primary_key: username, 'active': True})
         if user:
             if user.check_password(credentials.get('password', None)):
-                user.last_login = datetime.utcnow()
+                # authentication was established, update last login timestamp
+                user.last_login = datetime.datetime.utcnow()
                 asyncio.ensure_future(user.save(db))
                 return user
         return None
-
 
 
 async def authenticate(**credentials):

@@ -24,3 +24,6 @@ class Permission(Model, MongoCollectionMixin):
                 'unique': True
             }
         ]
+
+
+

@@ -5,6 +5,7 @@ import hashlib
 import binascii
 import datetime
 import random
+import uuid
 from pymongo import ASCENDING
 from tbone.data.models import Model
 from tbone.data.fields import *
@@ -30,13 +31,14 @@ class User(Model, MongoCollectionMixin):
     _id = ObjectIdField(projection=None)
     username = StringField(primary_key=True)
     email = EmailField()
-    password = ModelField(Password, projection=False)
+    password = ModelField(Password, projection=None)  # this field is never serialized
     first_name = StringField()
     middle_name = StringField()
     last_name = StringField()
     last_login = DateTimeField(readonly=True)
     active = BooleanField(default=False, readonly=True)
     superuser = BooleanField(default=False, readonly=True)
+    jti = StringField(readonly=True, projection=None)
 
     class Meta:
         namespace = 'account'
@@ -62,7 +64,7 @@ class User(Model, MongoCollectionMixin):
     def set_password(self, password):
         self.password = Password()
         self.password.password = self._hash(password)
-        self.password.set_date = datetime.datetime.now()
+        self.password.set_date = datetime.datetime.utcnow()
 
     def check_password(self, password):
         return self.password.password == self._hash(password)
@@ -90,20 +92,19 @@ class User(Model, MongoCollectionMixin):
             self.set_password(password)
 
 
-class Token(Model, MongoCollectionMixin):
+class Session(Model, MongoCollectionMixin):
     _id = ObjectIdField(projection=None)
     created = DateTimeField(default=datetime.datetime.utcnow())
-    token = StringField(required=True)
+    token = StringField(primary_key=True)
     user = DBRefField(User, required=True)
 
     class Meta:
         namespace = 'account'
-        name = 'tokens'
+        name = 'sessions'
         indices = [
             {
                 'name': '_token',
                 'fields': [('token', ASCENDING)],
-                'unique': True
             }, {
                 'name': '_user',
                 'fields': [('user', ASCENDING)],
@@ -111,10 +112,33 @@ class Token(Model, MongoCollectionMixin):
             }, {
                 'name': '_created',
                 'fields': [('created', ASCENDING)],
-                'unique': False,
                 'expireAfterSeconds': TOKEN_EXPIRY
             }
         ]
+
+    @classmethod
+    async def get_or_create(cls, db, user: User):
+        '''
+        Find or create a token for given user.
+        Do not use ``insert`` or ``create`` directly but rather this method.
+        Token automatically expires after TOKEN_EXPIRE
+        '''
+        user_ref = DBRefField(User).to_python(user)
+        token_data = await db[cls.get_collection_name()].find_one_and_update(
+            filter={'user': user_ref},
+            update={
+                '$set': {'user': user_ref},
+                '$setOnInsert': {
+                    'token': uuid.uuid4().hex,
+                    'created': datetime.datetime.utcnow()
+                }
+            },
+            upsert=True,
+            return_document=True
+        )
+        if token_data:
+            return cls.create_model(token_data)
+        return None
 
 
 class UserAction(Model, MongoCollectionMixin):
