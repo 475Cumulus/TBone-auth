@@ -18,20 +18,35 @@ TOKEN_EXPIRY = 604800  # one week
 
 
 class Password(Model):
+    '''
+    Maintains password information.
+
+    :param password:
+        A string contained a hashed version of the password
+
+    :param set_date:
+        DateTime of the last password set
+
+    :param old_passwords:
+        A list of old passwords that were previously used.
+        for cases when periodic password changing needs to be enforced
+        and password repeats are not allowed
+    '''
     password = StringField()
     set_date = DateTimeField()
+    old_passwords = ListField(StringField, limit=5)
 
 
 class User(Model, MongoCollectionMixin):
     '''
     Base class for user model.
-    Implements a user model as MongoDB collection
+    Implements a user model as a MongoDB collection
     Subclass this to extend your app's user model with additional data.
     '''
     _id = ObjectIdField(projection=None)
     username = StringField(primary_key=True)
-    email = EmailField()
-    password = ModelField(Password, projection=None)  # this field is never serialized
+    email = EmailField(export_if_none=False)
+    password = ModelField(Password, export_if_none=False, projection=None)  # this field is never serialized
     first_name = StringField()
     middle_name = StringField()
     last_name = StringField()
@@ -85,7 +100,7 @@ class User(Model, MongoCollectionMixin):
         return result
 
     async def deserialize(self, data: dict):
-        password = data.pop('password')
+        password = data.pop('password', None)
         await super(User, self).deserialize(data)
 
         if password:
