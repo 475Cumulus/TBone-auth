@@ -3,8 +3,6 @@
 
 import asyncio
 import datetime
-from collections import defaultdict
-# from base.authentication import Authentication
 from .models import User
 
 
@@ -18,18 +16,23 @@ class AuthenticationBackend(object):
 
 
 class DatabaseAuthenticationBackend(AuthenticationBackend):
-    ''' Authentication backend that uses MongoDB as the backend to store user credentials and authenticate against '''
-    async def authenticate(self, **credentials):
+    '''
+    Authentication backend that uses MongoDB as the backend to store user credentials and authenticate against
+    '''
+    @classmethod
+    async def authenticate(cls, **credentials):
         if 'db' not in credentials:
             raise ValueError('Failed to authenticate user. missing database handle')
         db = credentials.pop('db')
-        username = credentials[User.primary_key]
-        user = await User.find_one(db, {User.primary_key: username, 'active': True})
+        # get the primary identifying field - can be username, email or phone number
+        user_id = credentials[User.primary_key]
+        # user = await User.find_one(db, {User.primary_key: user_id, 'active': True})
+        user = await User.find_one(db, {'$or': [{'username': user_id}, {'email': user_id}], 'active': True})
         if user:
             if user.check_password(credentials.get('password', None)):
                 # authentication was established, update last login timestamp
                 user.last_login = datetime.datetime.utcnow()
-                asyncio.ensure_future(user.save(db))
+                asyncio.ensure_future(user.update(db))
                 return user
         return None
 
@@ -39,5 +42,4 @@ async def authenticate(**credentials):
     Global authentication method.
     Authenticate user with credentials using a given backend
     '''
-    backend = DatabaseAuthenticationBackend()
-    return await backend.authenticate(**credentials)
+    return await DatabaseAuthenticationBackend.authenticate(**credentials)

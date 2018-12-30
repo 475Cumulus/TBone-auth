@@ -6,8 +6,8 @@ import datetime
 import uuid
 import jwt
 import asyncio
-from tbone.resources import ModelResource
-from tbone.resources.http import *
+from tbone.resources import Resource, ModelResource
+from tbone.resources.verbs import *
 from tbone.resources.authentication import NoAuthentication
 from .auth import authenticate
 from .models import User, Session
@@ -21,7 +21,7 @@ BEARER = 'token'
 AUTHORIZATION_KEY = 'Authorization'
 
 
-class TokenAuthentication(NoAuthentication):
+class JWTAuthentication(NoAuthentication):
     '''
     Authentication for resources, based on JWT tokens
     '''
@@ -40,10 +40,12 @@ class TokenAuthentication(NoAuthentication):
             try:
                 payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
                 userid = payload['userid']
-                request.user = await User.find_one(request.app.db, {User.primary_key: userid})
-                return True
-            except jwt.ExpiredSignatureError:
-                return False
+                user = await User.find_one(request.app.db, {User.primary_key: userid})
+                if user:
+                    request.user = user
+                    return True
+            except (jwt.ExpiredSignatureError, jwt.DecodeError):
+                raise BadRequest('Invalid Token')
 
         return False
 
@@ -55,9 +57,6 @@ class CreateUserResource(ModelResource):
         incoming_detail = []
 
     async def create(self, **kwargs):
-        '''
-        Corresponds to POST request without a resource identifier, inserting a document into the database
-        '''
         try:
             # deserialize data from request params
             self.data.update(kwargs)
@@ -66,21 +65,21 @@ class CreateUserResource(ModelResource):
             await user.deserialize(self.data)
             # create document in DB
             await user.insert(db=self.db)
-            # serialize userect for response
+            # serialize user for response
             return await user.serialize()
         except Exception as ex:
             logger.exception(ex)
             raise BadRequest(ex)
 
 
-class SessionResource(ModelResource):
+class DatabaseSessionResource(ModelResource):
     class Meta:
         object_class = Session
         incoming_list = ['post']
         incoming_detail = ['get', 'delete']
         add_resource_uri = False
 
-    async def create_old(self, **kwargs):
+    async def create(self, **kwargs):
         # authenticate user with provided credentials
         user = await authenticate(db=self.db, **self.data)
         if user is None:
@@ -92,6 +91,29 @@ class SessionResource(ModelResource):
             return data
         raise HttpError('Failed to create token')
 
+    async def delete(self, **kwargs):
+        pk = self.pk_type(kwargs['pk'])
+        result = await self._meta.object_class.delete_entries(self.db, {self.pk: pk})
+        if result.acknowledged:
+            if result.deleted_count == 0:
+                raise NotFound()
+        else:
+            raise BadRequest('Failed to delete object')
+
+    # async def detail(self, **kwargs):
+
+    #     pk = self.pk_type(kwargs.get('pk'))
+    #     obj = await self._meta.object_class.find_one(self.db, {self.pk: pk})
+    #     if obj:
+    #         # this is a temporary hack until we figure out how to use dereference efficiently
+    #         obj_data = await obj.serialize()
+    #         user = await User.find_one(self.db, {'_id': obj.user.id})
+    #         obj_data['user'] = await user.serialize()
+    #         return obj_data
+    #     raise NotFound('Session was not found'.format(self.pk, str(pk)))
+
+
+class JWTSessionResource(Resource):
     async def create(self, **kwargs):
         # authenticate user with provided credentials
         user = await authenticate(db=self.db, **self.data)
@@ -111,32 +133,9 @@ class SessionResource(ModelResource):
 
         }
         token = jwt.encode(payload, JWT_SECRET, algorithm='HS256', headers=headers)
-        # update user object with the new jti - used to revoke token
+        # update user object with the new jti - used to revoke token if needed
         asyncio.ensure_future(User.modify(self.db, key=user.pk, data={'jti': jti}))
         return {
-            'token': token.decode('utf-8')
+            'token': token.decode('utf-8'),
+            'user': await user.serialize()
         }
-
-    # async def detail(self, **kwargs):
-
-    #     pk = self.pk_type(kwargs.get('pk'))
-    #     obj = await self._meta.object_class.find_one(self.db, {self.pk: pk})
-    #     if obj:
-    #         # this is a temporary hack until we figure out how to use dereference efficiently
-    #         obj_data = await obj.serialize()
-    #         user = await User.find_one(self.db, {'_id': obj.user.id})
-    #         obj_data['user'] = await user.serialize()
-    #         return obj_data
-    #     raise NotFound('Session was not found'.format(self.pk, str(pk)))
-
-    # async def delete(self, **kwargs):
-    #     pk = self.pk_type(kwargs['pk'])
-    #     result = await self._meta.object_class.delete_entries(self.db, {self.pk: pk})
-    #     if result.acknowledged:
-    #         if result.deleted_count == 0:
-    #             raise NotFound()
-    #     else:
-    #         raise BadRequest('Failed to delete object')
-
-
-
