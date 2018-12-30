@@ -7,6 +7,7 @@ import datetime
 import random
 import uuid
 from pymongo import ASCENDING
+from pymongo.results import UpdateResult
 from tbone.data.models import Model
 from tbone.data.fields import *
 from tbone.data.fields.mongo import ObjectIdField, DBRefField
@@ -63,7 +64,7 @@ class User(Model, MongoCollectionMixin):
                 'name': '_username',
                 'fields': [('username', ASCENDING)],
                 'unique': True,
-                'partialFilterExpression': {'email': {'$type': 'string'}}
+                'partialFilterExpression': {'username': {'$type': 'string'}}
             }, {
                 'name': '_email',
                 'fields': [('email', ASCENDING)],
@@ -97,6 +98,8 @@ class User(Model, MongoCollectionMixin):
             filter=query,
             update={'$set': {'active': True}},
         )
+        if isinstance(result, UpdateResult) and result.modified_count == 1:
+            self.active = True
         return result
 
     async def deserialize(self, data: dict):
