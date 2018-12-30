@@ -4,31 +4,23 @@
 import asyncio
 import pytest
 import datetime
-from tbone.resources import Resource, http
-from tbone.testing.resources import DummyResource
+from tbone.resources import verbs
+from tbone.db.models import create_collection
 from tbone.testing.fixtures import *
 from tbone.testing.clients import *
 from tbone_auth.auth import authenticate
 from tbone_auth.models import *
 from tbone_auth.resources import (
-    CreateUserResource as CreateUserResourceBase,
-    SessionResource as SessionResourceBase,
-    TokenAuthentication
+    CreateUserResource, DatabaseSessionResource, JWTSessionResource
 )
 from .base import *
+from .models import TodoItem
+from .resources import TodoItemResource
 
 USERNAME = 'rburg'
 PASSWORD = 'channel4i$gr8'
-
-
-class CreateUserResource(DummyResource, CreateUserResourceBase):
-    # subclasssed from tbone-auth to add a webserver mixin
-    pass
-
-
-class SessionResource(DummyResource, SessionResourceBase):
-    # subclasssed from tbone-auth to add a webserver mixin
-    pass
+USER_COUNT = 2
+TODO_COUNT = 4
 
 
 async def create_user_and_activate(app):
@@ -36,21 +28,23 @@ async def create_user_and_activate(app):
     url = '/api/{}/'.format(CreateUserResource.__name__)
     client = ResourceTestClient(app, CreateUserResource)
     # create user
-    new_user = {
+    user_data = {
         'username': 'rburg',
         'first_name': 'Ron',
         'last_name': 'Burgundy',
         'password': 'channel4i$gr8'
     }
-    response = await client.post(url, body=new_user)
-    assert response.status == http.CREATED
+    response = await client.post(url, body=user_data)
+    assert response.status == verbs.CREATED
     data = client.parse_response_data(response)
     assert 'username' in data
     assert 'first_name' in data
     assert 'last_name' in data
     # activate user
-    user_obj = User({'username': 'rburg'})
-    await user_obj.activate_user(app.db)
+    user = await User.find_one(db=app.db, query={'username': 'rburg'})
+    assert isinstance(user, User)
+    await user.activate_user(app.db)
+    assert user.active is True
 
 
 async def get_user_token(app):
@@ -66,6 +60,29 @@ async def get_user_token(app):
 
 
 @pytest.mark.asyncio
+@pytest.fixture(scope='function')
+async def create_todo_items(db):
+    app = App(db=db)
+    # create collection in db and optional indices
+    await create_collection(db, TodoItem)
+    # create some users
+    for i in range(USER_COUNT):
+        user = User({'username': 'user%d' % i})
+        user.set_password(PASSWORD)
+        await user.save(db)
+        assert user._id
+        await user.activate_user(db)
+        assert user.active is True
+        # insert todo items for this user
+        futures = []
+        for j in range(TODO_COUNT):
+            todo = TodoItem({'user': user, 'text': 'todo item %d' % j})
+            futures.append(todo.save(db))
+        await asyncio.gather(*futures)
+    return app
+
+
+@pytest.mark.asyncio
 async def test_create_new_user_and_authenticate(create_app, patch_datetime_utcnow):
     app = create_app
     # create user
@@ -75,56 +92,107 @@ async def test_create_new_user_and_authenticate(create_app, patch_datetime_utcno
     assert isinstance(user, User)
     # Wait to allow the task spawned by authentiate to update the last login timestamp
     await asyncio.sleep(.2)
-    same_user = await User.find_one(app.db, {'username': 'rburg'})
+    same_user = await User.find_one(app.db, query={'username': 'rburg'})
+    # the last login datetime was patched and mocked to set as 1/1/1950
     assert same_user.last_login == datetime.datetime(1950, 1, 1, 0, 0, 0)
 
 
 @pytest.mark.asyncio
-async def test_user_login(create_app):
+async def test_user_login_with_database_session(create_app):
     app = create_app
     # create user
     await create_user_and_activate(app)
+
     # create client
-    url = '/api/{}/'.format(SessionResource.__name__)
-    client = ResourceTestClient(app, SessionResource)
+    url = '/api/{}/'.format(DatabaseSessionResource.__name__)
+    client = ResourceTestClient(app, DatabaseSessionResource)
+
     # fail to create session with wrong password
     response = await client.post(url, body={'username': USERNAME, 'password': PASSWORD + '4'})
-    assert response.status == http.NOT_FOUND
+    assert response.status == verbs.NOT_FOUND
+
     # create session
     response = await client.post(url, body={'username': USERNAME, 'password': PASSWORD})
-    assert response.status == http.CREATED
+    assert response.status == verbs.CREATED
     data = client.parse_response_data(response)
     assert 'token' in data
+    assert 'user' in data
 
 
 @pytest.mark.asyncio
-async def test_resource_crud_with_authentication(create_app):
-
-    class SomeResource(DummyResource, Resource):
-        class Meta:
-            authentication = TokenAuthentication()
-
+async def test_user_login_with_jwt_session(create_app):
     app = create_app
     # create user
     await create_user_and_activate(app)
+
     # create client
-    url = '/api/{}/'.format(SomeResource.__name__)
-    client = ResourceTestClient(app, SomeResource)
-    # fail to make a request without token
+    url = '/api/{}/'.format(JWTSessionResource.__name__)
+    client = ResourceTestClient(app, JWTSessionResource)
+
+    # fail to create session with wrong password
+    response = await client.post(url, body={'username': USERNAME, 'password': PASSWORD + '4'})
+    assert response.status == verbs.NOT_FOUND
+
+    # create session
+    response = await client.post(url, body={'username': USERNAME, 'password': PASSWORD})
+    assert response.status == verbs.CREATED
+    data = client.parse_response_data(response)
+    assert 'token' in data
+    assert 'user' in data
+
+
+@pytest.mark.asyncio
+async def test_resource_crud_with_authentication(create_todo_items):
+    app = create_todo_items
+
+    # create client
+    url = '/api/{}/'.format(JWTSessionResource.__name__)
+    client = ResourceTestClient(app, JWTSessionResource)
+
+    # create session
+    response = await client.post(url, body={'username': 'user1', 'password': PASSWORD})
+    assert response.status == verbs.CREATED
+    data = client.parse_response_data(response)
+    assert 'token' in data
+    assert 'user' in data
+    user_token = data['token']
+
+    url = '/api/{}/'.format(TodoItemResource.__name__)
+    client = ResourceTestClient(app, TodoItemResource)
+
+    # fail to make API calls without authorization header
     response = await client.get(url)
-    assert response.status == http.UNAUTHORIZED
-    # get user token
-    token = await get_user_token(app)
-    response = await client.get(url, headers={'Authorization': 'token {}'.format(token)})
-    # expert not implemented
-    assert response.status == http.METHOD_NOT_IMPLEMENTED
-    response = await client.post(url, body={}, headers={'Authorization': 'token {}'.format(token)})
-    # expert not implemented
-    assert response.status == http.METHOD_NOT_IMPLEMENTED
+    assert response.status == verbs.UNAUTHORIZED
 
+    # fail to make API calls with invalid token
+    response = await client.get(url, headers={'Authorization': 'token {}'.format('bad-token')})
+    assert response.status == verbs.BAD_REQUEST
 
+    # get all user todo items
+    response = await client.get(url, headers={'Authorization': 'token {}'.format(user_token)})
+    assert response.status == verbs.OK
+    data = client.parse_response_data(response)
+    # the total count of todo items per user should be TODO_COUNT
+    assert data['meta']['total_count'] == TODO_COUNT
 
+    # class SomeResource(DummyResource, Resource):
+    #     class Meta:
+    #         authentication = TokenAuthentication()
 
-
-
-
+    # app = create_app
+    # # create user
+    # await create_user_and_activate(app)
+    # # create client
+    # url = '/api/{}/'.format(SomeResource.__name__)
+    # client = ResourceTestClient(app, SomeResource)
+    # # fail to make a request without token
+    # response = await client.get(url)
+    # assert response.status == http.UNAUTHORIZED
+    # # get user token
+    # token = await get_user_token(app)
+    # response = await client.get(url, headers={'Authorization': 'token {}'.format(token)})
+    # # expert not implemented
+    # assert response.status == http.METHOD_NOT_IMPLEMENTED
+    # response = await client.post(url, body={}, headers={'Authorization': 'token {}'.format(token)})
+    # # expert not implemented
+    # assert response.status == http.METHOD_NOT_IMPLEMENTED

@@ -68,6 +68,30 @@ async def test_create_multiple_users_without_email_address(create_app):
 
 
 @pytest.mark.asyncio
+async def test_create_multiple_users_with_email_address(create_app):
+    app = create_app
+
+    COUNT = 10
+    futures = []
+    for i in range(0, COUNT):
+        user = User({'email': 'user{}@example.com'.format(i + 1)})
+        user.set_password('pa$$word')
+        futures.append(user.save(app.db))
+
+    await asyncio.gather(*futures)
+
+    cursor = User.get_cursor(app.db)
+    users = await User.find(cursor)
+    # verify all users were created and are unique
+    usernames = set()  # set maintains uniqueness
+    for u in users:
+        assert isinstance(u, User)
+        usernames.add(u.email)
+    assert len(usernames) == COUNT
+    assert len(users) == COUNT
+
+
+@pytest.mark.asyncio
 async def test_authenticate_user(create_app):
     app = create_app
     user_data = {
@@ -82,14 +106,21 @@ async def test_authenticate_user(create_app):
     assert user._id
 
     # authentication should fail because user is not active
+    assert user.active is False
     u = await authenticate(db=app.db, username=USERNAME, password=PASSWORD)
     assert u is None
 
     # activate user
     await user.activate_user(app.db)
+    assert user.active is True
+
     # successful authentication
     u = await authenticate(db=app.db, username=USERNAME, password=PASSWORD)
     assert isinstance(u, User)
+
+    # fail to authenticate with wrong password
+    u = await authenticate(db=app.db, username=USERNAME, password='other_password')
+    assert u is None
 
 
 @pytest.mark.asyncio
@@ -128,6 +159,11 @@ async def test_create_token_for_user(create_app):
     user.set_password(PASSWORD)
     await user.save(app.db)
     assert user._id
+
+    #activate user
+    await user.activate_user(app.db)
+    assert user.active is True
+
     # get or create token for user
     session = await Session.get_or_create(app.db, user)
     assert isinstance(session, Session)
