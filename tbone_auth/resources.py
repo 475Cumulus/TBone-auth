@@ -2,26 +2,20 @@
 # encoding: utf-8
 
 import logging
-import datetime
-import uuid
-import jwt
 import asyncio
 from tbone.resources import Resource, ModelResource
 from tbone.resources.verbs import *
 from tbone.resources.authentication import NoAuthentication
-from .auth import authenticate
 from .models import User, Session
 
 
 logger = logging.getLogger(__file__)
 
-JWT_SECRET = '45j63lkjhg3492f3kjh25ps7'
-TOKEN_EXPIRY_DAYS = 10
 BEARER = 'token'
 AUTHORIZATION_KEY = 'Authorization'
 
 
-class JWTAuthentication(NoAuthentication):
+class TokenAuthentication(NoAuthentication):
     '''
     Authentication for resources, based on JWT tokens
     '''
@@ -38,14 +32,12 @@ class JWTAuthentication(NoAuthentication):
         token = self.extract_credentials(request)
         if token:
             try:
-                payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
-                userid = payload['userid']
-                user = await User.find_one(request.app.db, {User.primary_key: userid})
+                user = await request.app.auth.get_user_from_token(token)
                 if user:
-                    request.user = user
+                    request['user'] = user
                     return True
-            except (jwt.ExpiredSignatureError, jwt.DecodeError):
-                raise BadRequest('Invalid Token')
+            except Exception as ex:
+                raise BadRequest(ex)
 
         return False
 
@@ -81,9 +73,10 @@ class DatabaseSessionResource(ModelResource):
 
     async def create(self, **kwargs):
         # authenticate user with provided credentials
-        user = await authenticate(db=self.db, **self.data)
-        if user is None:
-            raise NotFound('No user was found with your credentials')
+        try:
+            user = await self.request.app.auth.authenticate(**self.data)
+        except Exception as ex:
+            raise BadRequest(str(ex))
         token = await Session.get_or_create(self.db, user)
         if token:
             data = await token.serialize()
@@ -114,28 +107,25 @@ class DatabaseSessionResource(ModelResource):
 
 
 class JWTSessionResource(Resource):
+    class Meta:
+        incoming_list = ['post']
+        add_resource_uri = False
+
     async def create(self, **kwargs):
         # authenticate user with provided credentials
-        user = await authenticate(db=self.db, **self.data)
-        if user is None:
-            raise NotFound('No user was found with your credentials')
-        # create JWT token
-        jti = uuid.uuid4().hex
-        headers = {
-            'alg': 'HS256',
-            'typ': 'JWT'
-        }
-        payload = {
-            'nbf': datetime.datetime.utcnow(),
-            'exp': datetime.datetime.utcnow() + datetime.timedelta(days=TOKEN_EXPIRY_DAYS),
-            'jti': jti,
-            'userid': user.pk,
-
-        }
-        token = jwt.encode(payload, JWT_SECRET, algorithm='HS256', headers=headers)
+        try:
+            user = await self.request.app.auth.authenticate(**self.data)
+        except Exception as ex:
+            raise BadRequest(str(ex))
+        # create user token
+        jwt_data = self.request.app.auth.create_user_token(user)
         # update user object with the new jti - used to revoke token if needed
-        asyncio.ensure_future(User.modify(self.db, key=user.pk, data={'jti': jti}))
+        asyncio.ensure_future(User.modify(self.db, key=user.pk, data={'jti': jwt_data['jti']}))
+
         return {
-            'token': token.decode('utf-8'),
+            'token': jwt_data['token'],
             'user': await user.serialize()
         }
+
+
+

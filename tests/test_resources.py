@@ -8,7 +8,7 @@ from tbone.resources import verbs
 from tbone.db.models import create_collection
 from tbone.testing.fixtures import *
 from tbone.testing.clients import *
-from tbone_auth.auth import authenticate
+from tbone_auth import Auth
 from tbone_auth.models import *
 from tbone_auth.resources import (
     CreateUserResource, DatabaseSessionResource, JWTSessionResource
@@ -62,8 +62,8 @@ async def get_user_token(app):
 @pytest.mark.asyncio
 @pytest.fixture(scope='function')
 async def create_todo_items(db):
-    app = App(db=db)
-    # create collection in db and optional indices
+    app = App(db=db)  # create collection in db and optional indices
+    Auth(app)
     await create_collection(db, TodoItem)
     # create some users
     for i in range(USER_COUNT):
@@ -88,8 +88,10 @@ async def test_create_new_user_and_authenticate(create_app, patch_datetime_utcno
     # create user
     await create_user_and_activate(app)
     # authenticate user
-    user = await authenticate(db=app.db, username='rburg', password='channel4i$gr8')
+    user = await app.auth.authenticate(userid='rburg', password='channel4i$gr8')
     assert isinstance(user, User)
+    # log user in - this updates the last login timestamp
+    await app.auth.login_user(user)
     # Wait to allow the task spawned by authentiate to update the last login timestamp
     await asyncio.sleep(.2)
     same_user = await User.find_one(app.db, query={'username': 'rburg'})
@@ -108,11 +110,11 @@ async def test_user_login_with_database_session(create_app):
     client = ResourceTestClient(app, DatabaseSessionResource)
 
     # fail to create session with wrong password
-    response = await client.post(url, body={'username': USERNAME, 'password': PASSWORD + '4'})
-    assert response.status == verbs.NOT_FOUND
+    response = await client.post(url, body={'userid': USERNAME, 'password': PASSWORD + '4'})
+    assert response.status == verbs.BAD_REQUEST
 
     # create session
-    response = await client.post(url, body={'username': USERNAME, 'password': PASSWORD})
+    response = await client.post(url, body={'userid': USERNAME, 'password': PASSWORD})
     assert response.status == verbs.CREATED
     data = client.parse_response_data(response)
     assert 'token' in data
@@ -130,11 +132,11 @@ async def test_user_login_with_jwt_session(create_app):
     client = ResourceTestClient(app, JWTSessionResource)
 
     # fail to create session with wrong password
-    response = await client.post(url, body={'username': USERNAME, 'password': PASSWORD + '4'})
-    assert response.status == verbs.NOT_FOUND
+    response = await client.post(url, body={'userid': USERNAME, 'password': PASSWORD + '4'})
+    assert response.status == verbs.BAD_REQUEST
 
     # create session
-    response = await client.post(url, body={'username': USERNAME, 'password': PASSWORD})
+    response = await client.post(url, body={'userid': USERNAME, 'password': PASSWORD})
     assert response.status == verbs.CREATED
     data = client.parse_response_data(response)
     assert 'token' in data
@@ -150,7 +152,7 @@ async def test_resource_crud_with_authentication(create_todo_items):
     client = ResourceTestClient(app, JWTSessionResource)
 
     # create session
-    response = await client.post(url, body={'username': 'user1', 'password': PASSWORD})
+    response = await client.post(url, body={'userid': 'user1', 'password': PASSWORD})
     assert response.status == verbs.CREATED
     data = client.parse_response_data(response)
     assert 'token' in data

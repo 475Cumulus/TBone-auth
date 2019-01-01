@@ -6,6 +6,7 @@ import asyncio
 import pytest
 from tbone.db.models import create_collection
 from tbone.testing.clients import App
+from tbone_auth import Auth
 from tbone_auth.models import *
 
 
@@ -14,6 +15,7 @@ from tbone_auth.models import *
 async def create_app(db):
     ''' Helper fixture for loading the accounts.json fixture into the database '''
     app = App(db=db)
+    Auth(app)
 
     # create collections and db indices
     futures = []

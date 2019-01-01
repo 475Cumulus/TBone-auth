@@ -44,8 +44,8 @@ class User(Model, MongoCollectionMixin):
     Implements a user model as a MongoDB collection
     Subclass this to extend your app's user model with additional data.
     '''
-    _id = ObjectIdField(projection=None)
-    username = StringField(primary_key=True)
+    _id = ObjectIdField(primary_key=True)
+    username = StringField()
     email = EmailField(export_if_none=False)
     password = ModelField(Password, export_if_none=False, projection=None)  # this field is never serialized
     first_name = StringField()
@@ -86,7 +86,7 @@ class User(Model, MongoCollectionMixin):
         return self.password.password == self._hash(password)
 
     def _hash(self, s):
-        return binascii.hexlify(hashlib.pbkdf2_hmac('sha256', str.encode(s), str.encode(SALT), 1000000)).decode('utf-8')
+        return binascii.hexlify(hashlib.pbkdf2_hmac('sha256', str.encode(s), str.encode(SALT), 10000)).decode('utf-8')
 
     async def activate_user(self, db):
         ''' Activates the user by setting the active field to True and updating the storage '''

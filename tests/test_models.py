@@ -7,13 +7,14 @@ import pytest
 from pymongo.errors import DuplicateKeyError
 from tbone.db.models import create_collection
 from tbone.testing.fixtures import *
+from tbone_auth.backends import AuthenticationBackend
 from tbone_auth.models import *
-from tbone_auth.auth import authenticate
 from .base import create_app
 
 
 USERNAME = 'rburg'
 PASSWORD = 'channel4i$gr8'
+
 
 @pytest.mark.asyncio
 async def test_create_user_with_unique_username_and_email(create_app):
@@ -107,20 +108,21 @@ async def test_authenticate_user(create_app):
 
     # authentication should fail because user is not active
     assert user.active is False
-    u = await authenticate(db=app.db, username=USERNAME, password=PASSWORD)
-    assert u is None
+    with pytest.raises(RuntimeError):
+        await app.auth.authenticate(userid=USERNAME, password=PASSWORD)
 
     # activate user
     await user.activate_user(app.db)
     assert user.active is True
 
     # successful authentication
-    u = await authenticate(db=app.db, username=USERNAME, password=PASSWORD)
+    u = await app.auth.authenticate(userid=USERNAME, password=PASSWORD)
     assert isinstance(u, User)
 
     # fail to authenticate with wrong password
-    u = await authenticate(db=app.db, username=USERNAME, password='other_password')
-    assert u is None
+    with pytest.raises(RuntimeError) as ex:
+        await app.auth.authenticate(userid=USERNAME, password='wrong_password')
+    assert str(ex.value) == 'Incorrect password'
 
 
 @pytest.mark.asyncio
@@ -160,7 +162,7 @@ async def test_create_token_for_user(create_app):
     await user.save(app.db)
     assert user._id
 
-    #activate user
+    # activate user
     await user.activate_user(app.db)
     assert user.active is True
 
@@ -177,7 +179,62 @@ async def test_create_token_for_user(create_app):
     assert len(sessions) == 1
 
 
+@pytest.mark.asyncio
+async def test_custom_user_model(create_app):
+    # create a custom user class where the username is the primary key
+    class CustomUser(User):
+        _id = ObjectIdField(projection=False)
+        username = StringField(primary_key=True)
+
+    app = create_app
+    app.auth.user_model = CustomUser
+
+    user_data = {
+        'username': USERNAME,
+        'first_name': 'Ron',
+        'last_name': 'Burgundy',
+    }
+    user = CustomUser(user_data)
+    user.set_password(PASSWORD)
+    await user.save(app.db)
+    assert user._id
+    assert user.pk == USERNAME
+
+    # authentication should fail because user is not active
+    assert user.active is False
+    with pytest.raises(RuntimeError) as ex:
+        await app.auth.authenticate(userid=USERNAME, password=PASSWORD)
+    assert str(ex.value) == 'User not found'
+    # activate user
+    await user.activate_user(app.db)
+    assert user.active is True
+
+    # successful authentication
+    u = await app.auth.authenticate(userid=USERNAME, password=PASSWORD)
+    assert isinstance(u, CustomUser)
+
+    # fail to authenticate with wrong password
+    with pytest.raises(RuntimeError) as ex:
+        await app.auth.authenticate(userid=USERNAME, password='wrong_password')
+    assert str(ex.value) == 'Incorrect password'
 
 
+@pytest.mark.asyncio
+async def test_custom_authentication_backend(create_app):
+    class FakeAuthenticationBackend(AuthenticationBackend):
+        @classmethod
+        async def authenticate(cls, app, **credentials):
+            user_data = {
+                'username': USERNAME,
+                'first_name': 'Ron',
+                'last_name': 'Burgundy',
+            }
+            user = User(user_data)
+            user.set_password(PASSWORD)
+            return user
 
+    app = create_app
+    app.auth.auth_backend = FakeAuthenticationBackend
 
+    u = await app.auth.authenticate(userid=USERNAME, password=PASSWORD)
+    assert isinstance(u, User)
