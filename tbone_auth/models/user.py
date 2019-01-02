@@ -102,6 +102,21 @@ class User(Model, MongoCollectionMixin):
             self.active = True
         return result
 
+    async def set_superuser(self, db, status):
+        ''' Sets the superuser status of a user in the database '''
+        db = db or self.db
+        # use model's pk as query
+        query = {self.primary_key: self.pk}
+        # push review
+        result = await db[self.get_collection_name()].update_one(
+            filter=query,
+            update={'$set': {'superuser': status}},
+        )
+        if isinstance(result, UpdateResult) and result.modified_count == 1:
+            self.active = True
+        return result
+
+
     async def deserialize(self, data: dict):
         password = data.pop('password', None)
         await super(User, self).deserialize(data)
