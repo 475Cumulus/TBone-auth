@@ -238,3 +238,43 @@ async def test_custom_authentication_backend(create_app):
 
     u = await app.auth.authenticate(userid=USERNAME, password=PASSWORD)
     assert isinstance(u, User)
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_with_additional_conditions(create_app):
+    app = create_app
+    user_data = {
+        'username': USERNAME,
+        'first_name': 'Ron',
+        'last_name': 'Burgundy',
+        'email': 'rburg@channel4.com'
+    }
+    user = User(user_data)
+    user.set_password(PASSWORD)
+    await user.save(app.db)
+    assert user._id
+
+    # authentication should fail because user is not active
+    assert user.active is False
+    with pytest.raises(RuntimeError):
+        await app.auth.authenticate(userid=USERNAME, password=PASSWORD)
+
+    # activate user
+    await user.activate_user(app.db)
+    assert user.active is True
+
+    # successful authentication
+    u = await app.auth.authenticate(userid=USERNAME, password=PASSWORD)
+    assert isinstance(u, User)
+
+    # fail to authenticate when we require superuser account
+    with pytest.raises(RuntimeError):
+        await app.auth.authenticate(userid=USERNAME, password=PASSWORD, superuser=True)
+
+    await user.set_superuser(app.db, True)
+
+    u = await app.auth.authenticate(userid=USERNAME, password=PASSWORD)
+    assert isinstance(u, User)
+
+
+

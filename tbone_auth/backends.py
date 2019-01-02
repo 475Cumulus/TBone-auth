@@ -27,17 +27,24 @@ class DatabaseAuthenticationBackend(AuthenticationBackend):
     async def authenticate(cls, app, **credentials):
         # get the primary identifying field - listed in the user model
         user_model = app.auth.user_model
-        if 'userid' not in credentials:
-            raise ValueError('User id not provided')
-        user_id = credentials['userid']
+        # make sure we have a user id
+        user_id = credentials.pop('userid')
         if user_id is None or user_id == '':
             raise ValueError('User id not provided')
-        user = await user_model.find_one(app.db, {
+
+        password = credentials.pop('password')
+        if password is None or password == '':
+            raise ValueError('Password not provided')
+
+        query = {
             '$or': [{'username': user_id}, {'email': user_id}],
             'active': True
-        })
+        }
+        query.update(credentials)
+
+        user = await user_model.find_one(app.db, query)
         if user:
-            if user.check_password(credentials.get('password', None)) is False:
+            if user.check_password(password) is False:
                 raise RuntimeError('Incorrect password')
         else:
             raise RuntimeError('User not found')
