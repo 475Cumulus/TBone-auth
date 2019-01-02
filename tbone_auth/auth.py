@@ -104,7 +104,7 @@ class Auth(object):
                 session = request.get(SESSION_NAME)
                 if session:
                     try:
-                        user = await request.app.auth.get_user_from_token(session)
+                        user = await request.app.auth.get_user_from_token(session['token'])
                         if user is None:
                             raise Exception('No user was derived fron token')
                         request['user'] = user
